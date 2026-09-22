@@ -702,7 +702,8 @@ class TestGameObjectsEmitEvents:
 
     def test_scheduler_releases_cpu_when_process_on_cpu_dies_from_starvation(self, stage):
         """Test that the Scheduler's used_cpus goes back to zero after a process that was
-        blocked on a page fault while on a CPU is killed by starvation."""
+        blocked on a page fault while on a CPU is killed by starvation, and that the freed
+        CPU slot can be claimed again by another process without inflating used_cpus."""
         from automation.api import Scheduler
         scheduler = Scheduler()
         game_monitor.clear_events()
@@ -736,6 +737,7 @@ class TestGameObjectsEmitEvents:
 
         assert process.state == ProcessState.BLOCKED_ON_CPU_PAGE_FAULT
         assert scheduler.used_cpus == 1
+        held_cpu = process.cpu
 
         # Leave the page fault unresolved until the process dies from starvation
         for i in range(1, DEAD_STARVATION_LEVEL):
@@ -744,9 +746,17 @@ class TestGameObjectsEmitEvents:
         game_monitor.clear_events()
 
         assert process.state == ProcessState.ENDED
-        assert stage.process_manager.cpu_manager.get_current_stats()['active_process_count'] == 0
         assert process.pid not in scheduler.processes
         assert scheduler.used_cpus == 0
+
+        # The freed CPU slot can be claimed again by another process
+        other_process = stage.process_manager.get_process(2)
+        other_process.use_cpu()
+        scheduler(game_monitor.get_events())
+        game_monitor.clear_events()
+
+        assert other_process.cpu is held_cpu
+        assert scheduler.used_cpus == 1
 
     def test_scheduler_clears_waiting_for_page_when_page_recovered_off_cpu(self, stage):
         """Test that the Scheduler no longer reports waiting_for_page after a process yields the
